@@ -1,0 +1,38 @@
+{% extends 'game/base.html' %}
+
+{% block content %}
+<div class="home-box">
+    <h1 class="title">Abalone</h1>
+    <p class="subtitle">Jouez en ligne avec un ami, sans prise de tête.</p>
+    
+    {% if active_game %}
+        <div class="active-game-banner">
+            <p>Vous avez une partie en cours !</p>
+            <a href="{% url 'lobby' active_game.code %}" class="btn primary-btn">Continuer la partie</a>
+        </div>
+    {% endif %}
+
+    <div class="actions">
+        <div class="action-card">
+            <h2>Créer une partie</h2>
+            <p>Générez un code unique et invitez votre ami.</p>
+            <form method="POST" action="{% url 'create_game' %}">
+                {% csrf_token %}
+                <button type="submit" class="btn primary-btn">Créer</button>
+            </form>
+        </div>
+
+        <div class="action-divider">OU</div>
+
+        <div class="action-card">
+            <h2>Rejoindre une partie</h2>
+            <p>Saisissez le code à 6 caractères fourni par votre ami.</p>
+            <form method="POST" action="{% url 'join_game' %}">
+                {% csrf_token %}
+                <input type="text" name="code" placeholder="EX: A1B2C3" maxlength="6" required class="input-code">
+                <button type="submit" class="btn secondary-btn">Rejoindre</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends 'game/base.html' %}
+
+{% block content %}
+<div class="lobby-box">
+    <h1 class="title">Salle d'attente</h1>
+    
+    <div class="code-display">
+        <p>Code de la partie</p>
+        <div class="code">{{ game.code }}</div>
+        <button class="btn secondary-btn" onclick="copyCode()">Copier le lien</button>
+    </div>
+
+    {% if is_registered %}
+        <div class="waiting-status">
+            <p>En attente de l'adversaire...</p>
+            <div class="spinner"></div>
+        </div>
+        <script>
+            // Refresh to check if opponent joined
+            setTimeout(() => {
+                window.location.reload();
+            }, 3000);
+        </script>
+    {% else %}
+        <div class="username-form">
+            <h2>Rejoindre cette partie</h2>
+            <form method="POST">
+                {% csrf_token %}
+                <input type="text" name="username" placeholder="Votre pseudo" required class="input-text">
+                <button type="submit" class="btn primary-btn">Prêt à jouer</button>
+            </form>
+        </div>
+    {% endif %}
+</div>
+
+<script>
+function copyCode() {
+    const code = "{{ game.code }}";
+    // We can also generate a direct link depending on how the user wants it,
+    // but copying the code is straightforward.
+    navigator.clipboard.writeText(code).then(() => {
+        alert("Code copié !");
+    });
+}
+</script>
+{% endblock %}

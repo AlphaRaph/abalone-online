@@ -1,0 +1,308 @@
+{% extends 'game/base.html' %}
+
+{% block content %}
+<div class="play-layout">
+    <div class="players-panel">
+        <div class="player-tag black-tag {% if player_color == 'black' %}is-me{% endif %}">
+            ⚫ {{ black_name }}{% if player_color == 'black' %} <span class="you-badge">(vous)</span>{% endif %}
+        </div>
+        <div class="status-panel">
+            <div id="turn-indicator" class="status-indicator"></div>
+            <span id="status-text">Connexion...</span>
+        </div>
+        <div class="player-tag white-tag {% if player_color == 'white' %}is-me{% endif %}">
+            ⚪ {{ white_name }}{% if player_color == 'white' %} <span class="you-badge">(vous)</span>{% endif %}
+        </div>
+    </div>
+
+    <div class="scores-panel">
+        <div class="score black-score">Noirs pris: <span id="score-white">0</span></div>
+        <div class="score white-score">Blancs pris: <span id="score-black">0</span></div>
+    </div>
+
+    <svg id="abalone-board" width="600" height="600" viewBox="-300 -300 600 600">
+        <defs>
+            <polygon id="hex" points="30.31,17.5 0,35 -30.31,17.5 -30.31,-17.5 0,-35 30.31,-17.5" />
+            <radialGradient id="black-grad" cx="30%" cy="30%" r="50%">
+                <stop offset="0%" stop-color="#4b5563" />
+                <stop offset="100%" stop-color="#000000" />
+            </radialGradient>
+            <radialGradient id="white-grad" cx="30%" cy="30%" r="50%">
+                <stop offset="0%" stop-color="#ffffff" />
+                <stop offset="100%" stop-color="#9ca3af" />
+            </radialGradient>
+        </defs>
+        <g id="grid-layer"></g>
+        <g id="marble-layer"></g>
+    </svg>
+
+    <div class="controls">
+        <button id="btn-cancel" class="btn secondary-btn" onclick="cancelSelection()" disabled>Annuler la sélection</button>
+        <button id="btn-undo" class="btn secondary-btn" onclick="undoMove()" disabled>Annuler le coup</button>
+        <a href="{% url 'leave_game' game.code %}" class="btn secondary-btn danger-btn">Quitter la partie</a>
+    </div>
+</div>
+
+<!-- Modal d'erreur -->
+<div id="error-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>Coup impossible</h3>
+        <p id="error-message"></p>
+        <div class="modal-actions">
+            <button class="btn primary-btn" onclick="closeErrorModal()">Fermer</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de fin de partie -->
+<div id="endgame-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h2 id="endgame-title"></h2>
+        <p id="endgame-message"></p>
+        <div class="modal-actions" id="endgame-actions">
+            <button id="btn-rematch" class="btn primary-btn" onclick="requestRematch()">Rejouer</button>
+            <a href="{% url 'leave_game' game.code %}" class="btn secondary-btn danger-btn">Quitter la partie</a>
+        </div>
+    </div>
+</div>
+
+<footer class="credits">Créé par Raphaël</footer>
+
+<script>
+    const gameCode = "{{ game.code }}";
+    const myColor = "{{ player_color }}";
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/game/${gameCode}/`;
+    
+    let socket;
+    let boardState = {};
+    let currentTurn = '';
+    let gameStatus = 'playing';
+    let selectedMarbles = [];
+    let historyLength = 0;
+    const hexSize = 35;
+    
+    function initWebSocket() {
+        socket = new WebSocket(wsUrl);
+        
+        socket.onopen = () => {
+            document.getElementById('status-text').innerText = "En attente...";
+        };
+        
+        socket.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+
+            if (data.type === 'state_update') {
+                boardState = data.state;
+                currentTurn = data.turn;
+                gameStatus = data.status || 'playing';
+                historyLength = data.history_length || 0;
+                
+                if (data.score_black !== undefined) document.getElementById('score-black').innerText = data.score_black;
+                if (data.score_white !== undefined) document.getElementById('score-white').innerText = data.score_white;
+                
+                renderMarbles();
+                updateStatusText(data);
+                
+                // Reset selection
+                selectedMarbles = [];
+                document.querySelectorAll('.hex.selected').forEach(el => el.classList.remove('selected'));
+                updateButtons();
+                
+                // Fin de partie : n'ouvrir la modale que si info contient le résultat
+                if (gameStatus === 'finished' && data.info && data.info.length > 0) {
+                    showEndgameModal(data.info);
+                } else if (gameStatus !== 'finished') {
+                    closeEndgameModal();
+                }
+
+            } else if (data.type === 'error') {
+                showErrorModal(data.message);
+
+            } else if (data.type === 'rematch_requested') {
+                const btn = document.getElementById('btn-rematch');
+                if (btn) btn.innerText = "L'adversaire veut rejouer ! Cliquez ici";
+
+            } else if (data.type === 'opponent_left') {
+                const actions = document.getElementById('endgame-actions');
+                if (actions) {
+                    actions.innerHTML = `
+                        <p style="margin-bottom:1rem; color: var(--text-secondary);">L'adversaire a quitté la partie.</p>
+                        <a href="{% url 'leave_game' game.code %}" class="btn secondary-btn danger-btn">Quitter la partie</a>
+                    `;
+                }
+            }
+        };
+        
+        socket.onclose = () => {
+            document.getElementById('status-text').innerText = "Déconnecté.";
+        };
+    }
+    
+    function updateStatusText(data) {
+        const textEl = document.getElementById('status-text');
+        const indicator = document.getElementById('turn-indicator');
+        indicator.className = `status-indicator ${currentTurn}`;
+        
+        if (data.status === 'finished') {
+            textEl.innerText = "Partie terminée !";
+            return;
+        }
+        textEl.innerText = (currentTurn === myColor) ? "C'est votre tour !" : "Tour de l'adversaire...";
+    }
+
+    function generateGrid() {
+        const gridLayer = document.getElementById('grid-layer');
+        for (let q = -4; q <= 4; q++) {
+            for (let r = -4; r <= 4; r++) {
+                if (Math.abs(-q - r) <= 4) {
+                    const {x, y} = getHexCenter(q, r);
+                    const hex = document.createElementNS("http://www.w3.org/2000/svg", "use");
+                    hex.setAttribute("href", "#hex");
+                    hex.setAttribute("x", x);
+                    hex.setAttribute("y", y);
+                    hex.setAttribute("class", "hex");
+                    hex.setAttribute("data-coord", `${q},${r}`);
+                    hex.onclick = () => onHexClick(q, r);
+                    gridLayer.appendChild(hex);
+                }
+            }
+        }
+    }
+    
+    function getHexCenter(q, r) {
+        const x = hexSize * Math.sqrt(3) * (q + r/2);
+        const y = -hexSize * 1.5 * r;
+        return {x, y};
+    }
+    
+    function renderMarbles() {
+        const marbleLayer = document.getElementById('marble-layer');
+        marbleLayer.innerHTML = '';
+        for (const [coord, color] of Object.entries(boardState)) {
+            const [q, r] = coord.split(',').map(Number);
+            const {x, y} = getHexCenter(q, r);
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", x);
+            circle.setAttribute("cy", y);
+            circle.setAttribute("r", hexSize * 0.75);
+            circle.setAttribute("class", "marble");
+            circle.setAttribute("fill", color === 'black' ? "url(#black-grad)" : "url(#white-grad)");
+            marbleLayer.appendChild(circle);
+        }
+    }
+    
+    function onHexClick(q, r) {
+        if (currentTurn !== myColor || gameStatus !== 'playing') return;
+        
+        const coord = `${q},${r}`;
+        const hexEl = document.querySelector(`.hex[data-coord="${coord}"]`);
+        
+        if (boardState[coord] === myColor) {
+            if (selectedMarbles.includes(coord)) {
+                selectedMarbles = selectedMarbles.filter(c => c !== coord);
+                hexEl.classList.remove('selected');
+            } else {
+                if (selectedMarbles.length < 3) {
+                    selectedMarbles.push(coord);
+                    hexEl.classList.add('selected');
+                }
+            }
+            updateButtons();
+        } else if (selectedMarbles.length > 0) {
+            const directions = {
+                '1,0': '0', '1,-1': '1', '0,-1': '2',
+                '-1,0': '3', '-1,1': '4', '0,1': '5'
+            };
+            let foundDir = false;
+            for (let sel of selectedMarbles) {
+                const [msq, msr] = sel.split(',').map(Number);
+                const k = directions[`${q-msq},${r-msr}`];
+                if (k !== undefined) {
+                    sendMove(k);
+                    foundDir = true;
+                    break;
+                }
+            }
+            if (!foundDir) showErrorModal("Cliquez sur une case immédiatement adjacente pour indiquer la direction.");
+        }
+    }
+    
+    function updateButtons() {
+        const btnCancel = document.getElementById('btn-cancel');
+        const btnUndo = document.getElementById('btn-undo');
+        
+        // "Annuler la sélection" : actif seulement si des billes sont sélectionnées
+        btnCancel.disabled = (selectedMarbles.length === 0);
+        
+        // "Annuler le coup" : actif uniquement si on vient de jouer ET historique non vide
+        btnUndo.disabled = (currentTurn === myColor || historyLength === 0);
+    }
+
+    function cancelSelection() {
+        selectedMarbles = [];
+        document.querySelectorAll('.hex.selected').forEach(el => el.classList.remove('selected'));
+        updateButtons();
+    }
+    
+    function sendMove(direction) {
+        if (gameStatus !== 'playing') return;
+        socket.send(JSON.stringify({
+            type: 'move',
+            marbles: selectedMarbles,
+            direction: direction,
+            player: myColor
+        }));
+    }
+    
+    function undoMove() {
+        socket.send(JSON.stringify({ type: 'undo', player: myColor }));
+    }
+    
+    function requestRematch() {
+        socket.send(JSON.stringify({ type: 'rematch', player: myColor }));
+        const btn = document.getElementById('btn-rematch');
+        if (btn) {
+            const p = document.createElement('p');
+            p.style.color = 'var(--text-secondary)';
+            p.style.marginBottom = '0';
+            p.innerText = "En attente de l'adversaire...";
+            btn.replaceWith(p);
+        }
+    }
+    
+    // ── Modals ──────────────────────────────────────────────────
+    function showErrorModal(msg) {
+        document.getElementById('error-message').innerText = msg;
+        document.getElementById('error-modal').style.display = 'flex';
+    }
+    
+    function closeErrorModal() {
+        document.getElementById('error-modal').style.display = 'none';
+    }
+    
+    function showEndgameModal(info) {
+        const iWon = (info.includes("White wins") && myColor === 'white') ||
+                     (info.includes("Black wins") && myColor === 'black');
+        
+        document.getElementById('endgame-title').innerText = iWon ? "Bravo ! 🎉" : "Dommage... 😢";
+        document.getElementById('endgame-message').innerText = iWon
+            ? "Vous avez gagné en éjectant 6 billes !"
+            : "Votre adversaire a gagné.";
+        
+        document.getElementById('endgame-actions').innerHTML = `
+            <button id="btn-rematch" class="btn primary-btn" onclick="requestRematch()">Rejouer</button>
+            <a href="{% url 'leave_game' game.code %}" class="btn secondary-btn danger-btn">Quitter la partie</a>
+        `;
+        
+        document.getElementById('endgame-modal').style.display = 'flex';
+    }
+    
+    function closeEndgameModal() {
+        document.getElementById('endgame-modal').style.display = 'none';
+    }
+
+    generateGrid();
+    initWebSocket();
+</script>
+{% endblock %}

@@ -133,14 +133,11 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# En production avec HTTPS
-if not DEBUG:
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    CSRF_TRUSTED_ORIGINS = [
-        f'https://{h}' for h in ALLOWED_HOSTS if h
-    ]
+# CSRF : nécessaire derrière un reverse proxy (Nginx)
+# En HTTP, on liste les origines autorisées sans forcer HTTPS
+CSRF_TRUSTED_ORIGINS = [
+    f'http://{h}' for h in ALLOWED_HOSTS if h and h != '*'
+]
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
